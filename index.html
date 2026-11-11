@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cửa nhà – điều khiển từ xa</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<style>
+  :root {
+    --bg: #E9EDF1;
+    --surface: #F7F9FB;
+    --ink: #1F2A44;
+    --muted: #5D6880;
+    --line: #CDD5DF;
+    --brass: #A87A22;
+    --locked: #B5432F;
+    --open: #2E7A57;
+    --focus: #3B6FD8;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121A2B;
+      --surface: #1B2539;
+      --ink: #E7ECF4;
+      --muted: #9AA6BC;
+      --line: #2C3852;
+      --brass: #D2A24A;
+      --locked: #E0705A;
+      --open: #5BC08F;
+      --focus: #7FA4F0;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Be Vietnam Pro", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 16px;
+    line-height: 1.5;
+    padding: calc(env(safe-area-inset-top, 0px) + 20px) 18px calc(env(safe-area-inset-bottom, 0px) + 28px);
+  }
+  .wrap { max-width: 440px; margin: 0 auto; }
+
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 28px; }
+  h1 { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.01em; margin: 0; }
+  .conn { display: inline-flex; align-items: center; gap: 8px; font-size: 0.85rem; color: var(--muted); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .conn.ok .dot { background: var(--open); }
+  .conn.bad .dot { background: var(--locked); }
+  .conn.wait .dot { background: var(--brass); }
+
+  label { display: block; font-size: 0.9rem; font-weight: 500; margin: 0 0 6px; }
+  input[type=text], input[type=password] {
+    width: 100%;
+    font: inherit;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1.5px solid var(--line);
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+  }
+  input:focus-visible, button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+  .check { display: flex; align-items: center; gap: 10px; font-size: 0.9rem; color: var(--muted); margin: -4px 0 20px; }
+  .check input { width: 18px; height: 18px; margin: 0; }
+
+  .btn {
+    width: 100%;
+    font: inherit;
+    font-weight: 600;
+    border-radius: 10px;
+    padding: 13px 16px;
+    cursor: pointer;
+    border: 1.5px solid var(--ink);
+    background: var(--ink);
+    color: var(--bg);
+  }
+  .btn.ghost { background: transparent; color: var(--ink); border-color: var(--line); }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .msg { min-height: 1.5em; font-size: 0.92rem; margin: 14px 0 0; }
+  .msg.bad { color: var(--locked); }
+  .msg.ok { color: var(--open); }
+  .hint { font-size: 0.85rem; color: var(--muted); margin-top: 18px; }
+
+  /* Nút tròn: giữ để mở */
+  .dial-area { text-align: center; margin-bottom: 26px; }
+  .dial {
+    position: relative;
+    width: 220px;
+    height: 220px;
+    border-radius: 50%;
+    border: 1.5px solid var(--line);
+    background: var(--surface);
+    color: var(--locked);
+    cursor: pointer;
+    padding: 0;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+  .dial:disabled { cursor: default; }
+  .dial.is-open { color: var(--open); }
+  .dial.is-off { color: var(--muted); }
+  .ring { position: absolute; inset: 0; transform: rotate(-90deg); }
+  .ring circle {
+    fill: none;
+    stroke: var(--brass);
+    stroke-width: 6;
+    stroke-linecap: round;
+    stroke-dasharray: 654;
+    stroke-dashoffset: 654;
+    transition: stroke-dashoffset 0.15s ease-out;
+  }
+  .dial.holding .ring circle { stroke-dashoffset: 0; transition: stroke-dashoffset 0.9s linear; }
+  .lock { width: 72px; height: 72px; }
+  .shackle { transform-origin: 33px 22px; transition: transform 0.35s ease; }
+  .dial.is-open .shackle { transform: translateY(-3px) rotate(-24deg); }
+  .state { font-size: 1.6rem; font-weight: 700; margin: 18px 0 2px; }
+  .sub { color: var(--muted); font-size: 0.95rem; margin: 0; }
+
+  .controls { margin-bottom: 30px; }
+  .controls .btn { margin-top: 10px; }
+
+  h2 { font-size: 1rem; font-weight: 600; margin: 0 0 10px; }
+  ul.log { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+  ul.log li { display: flex; gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--line); font-size: 0.93rem; }
+  ul.log time { color: var(--muted); font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+  ul.log .warn { color: var(--locked); }
+  .empty { color: var(--muted); font-size: 0.93rem; padding: 12px 0; }
+
+  footer { margin-top: 30px; }
+  [hidden] { display: none !important; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .shackle, .ring circle { transition: none !important; }
+    .dial.holding .ring circle { transition: stroke-dashoffset 0.9s linear !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Cửa nhà</h1>
+    <span class="conn" id="conn"><span class="dot"></span><span id="connText">Chưa kết nối</span></span>
+  </header>
+
+  <!-- Đăng nhập -->
+  <section id="login">
+    <form id="loginForm" autocomplete="on">
+      <label for="user">Tài khoản HiveMQ</label>
+      <input type="text" id="user" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" required>
+      <label for="pass">Mật khẩu HiveMQ</label>
+      <input type="password" id="pass" name="password" autocomplete="current-password" required>
+      <div class="check">
+        <input type="checkbox" id="remember" checked>
+        <span>Nhớ tên tài khoản trên máy này (không lưu mật khẩu)</span>
+      </div>
+      <button class="btn" type="submit" id="loginBtn">Kết nối</button>
+      <p class="msg" id="loginMsg" role="status" aria-live="polite"></p>
+    </form>
+    <p class="hint">Dùng tài khoản đã tạo trong mục Access Management của HiveMQ. Mật khẩu chỉ dùng để kết nối, không được lưu lại.</p>
+  </section>
+
+  <!-- Điều khiển -->
+  <section id="main" hidden>
+    <div class="dial-area">
+      <button class="dial is-off" id="dial" disabled aria-describedby="sub">
+        <svg class="ring" viewBox="0 0 220 220" aria-hidden="true"><circle cx="110" cy="110" r="104"/></svg>
+        <svg class="lock" viewBox="0 0 48 48" aria-hidden="true">
+          <path class="shackle" d="M15 22v-6a9 9 0 0 1 18 0v6" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+          <rect x="10" y="22" width="28" height="20" rx="4" fill="currentColor"/>
+        </svg>
+      </button>
+      <p class="state" id="state">Đang chờ thiết bị…</p>
+      <p class="sub" id="sub">Đang lấy trạng thái cửa</p>
+    </div>
+
+    <div class="controls">
+      <label for="pin">PIN mở cửa từ xa</label>
+      <input type="password" id="pin" inputmode="numeric" autocomplete="off" maxlength="8">
+      <button class="btn ghost" type="button" id="lockBtn">Khóa cửa</button>
+      <p class="msg" id="notice" role="status" aria-live="polite"></p>
+    </div>
+
+    <h2>Hoạt động gần đây</h2>
+    <ul class="log" id="log"></ul>
+    <p class="empty" id="logEmpty">Chưa có hoạt động nào từ lúc mở trang.</p>
+
+    <footer>
+      <button class="btn ghost" type="button" id="logoutBtn">Ngắt kết nối</button>
+    </footer>
+  </section>
+</div>
+
+<script>
+  // ===== Cấu hình =====
+  var HOST = "iot102-f2371bef.a01.euc1.aws.hivemq.cloud";
+  var WS_URL = "wss://" + HOST + ":8884/mqtt";
+  var T = { cmd: "smartdoor/cmd", status: "smartdoor/status", log: "smartdoor/log", online: "smartdoor/online" };
+
+  var EVENT_TEXT = {
+    REMOTE_UNLOCK: "Mở cửa từ xa",
+    REMOTE_LOCK: "Khóa cửa từ xa",
+    REMOTE_WRONG_PIN: "Nhập sai PIN từ xa",
+    REMOTE_DENIED: "Lệnh mở từ xa bị từ chối",
+    BOOT: "Thiết bị vừa khởi động"
+  };
+  var DETAIL_TEXT = {
+    "lockdown": "cửa đang khóa bảo mật",
+    "too many tries": "sai quá nhiều lần, chờ 60 giây",
+    "MQTT": "qua Internet"
+  };
+
+  var client = null;
+  var state = { status: null, online: null };
+  var logs = [];
+  var holdTimer = null;
+  var connectWatch = null;
+
+  function $(id) { return document.getElementById(id); }
+
+  function setConn(text, kind) {
+    $("connText").textContent = text;
+    $("conn").className = "conn " + (kind || "");
+  }
+
+  function notice(text, kind) {
+    var n = $("notice");
+    n.textContent = text;
+    n.className = "msg " + (kind || "");
+  }
+
+  function showMain(on) {
+    $("main").hidden = !on;
+    $("login").hidden = on;
+  }
+
+  // ===== Kết nối HiveMQ =====
+  function connect(user, pass) {
+    if (typeof mqtt === "undefined") {
+      $("loginMsg").textContent = "Không tải được thư viện kết nối. Kiểm tra Internet rồi tải lại trang.";
+      $("loginMsg").className = "msg bad";
+      return;
+    }
+    $("loginBtn").disabled = true;
+    $("loginMsg").textContent = "";
+    setConn("Đang kết nối…", "wait");
+
+    client = mqtt.connect(WS_URL, {
+      username: user,
+      password: pass,
+      clientId: "web-" + Math.random().toString(16).slice(2, 10),
+      protocolVersion: 4,
+      clean: true,
+      connectTimeout: 10000,
+      reconnectPeriod: 4000
+    });
+
+    connectWatch = setTimeout(function () {
+      if (client && !client.connected) {
+        client.end(true);
+        client = null;
+        $("loginBtn").disabled = false;
+        $("loginMsg").textContent = "Không kết nối được tới máy chủ HiveMQ. Kiểm tra Internet rồi thử lại.";
+        $("loginMsg").className = "msg bad";
+        setConn("Chưa kết nối", "bad");
+      }
+    }, 15000);
+
+    client.on("connect", function () {
+      clearTimeout(connectWatch);
+      setConn("Đã kết nối", "ok");
+      client.subscribe("smartdoor/#", { qos: 1 });
+      $("loginBtn").disabled = false;
+      $("pass").value = "";
+      try {
+        if ($("remember").checked) localStorage.setItem("sd_user", user);
+        else localStorage.removeItem("sd_user");
+      } catch (e) {}
+      showMain(true);
+      render();
+    });
+
+    client.on("reconnect", function () { setConn("Đang kết nối lại…", "wait"); });
+    client.on("offline", function () { setConn("Mất kết nối Internet", "bad"); });
+
+    client.on("error", function (err) {
+      if (err && (err.code === 4 || err.code === 5)) {
+        clearTimeout(connectWatch);
+        client.end(true);
+        client = null;
+        showMain(false);
+        $("loginBtn").disabled = false;
+        $("loginMsg").textContent = "Sai tài khoản hoặc mật khẩu HiveMQ. Kiểm tra lại rồi kết nối.";
+        $("loginMsg").className = "msg bad";
+        setConn("Chưa kết nối", "bad");
+      }
+    });
+
+    client.on("message", onMessage);
+  }
+
+  function send(text) {
+    if (!client || !client.connected) {
+      notice("Chưa kết nối máy chủ, chưa gửi được lệnh.", "bad");
+      return false;
+    }
+    client.publish(T.cmd, text, { qos: 1, retain: false });
+    return true;
+  }
+
+  // ===== Nhận tin từ cửa =====
+  function onMessage(topic, payload) {
+    var text = payload.toString();
+    if (topic === T.cmd) return;                      // bỏ qua lệnh của chính mình (có PIN)
+
+    if (topic === T.status) { state.status = text; render(); return; }
+    if (topic === T.online) { state.online = text; render(); return; }
+
+    if (topic === T.log) {
+      var evt = "", detail = "", warn = false;
+      try {
+        var j = JSON.parse(text);
+        if (j.event !== undefined) { evt = String(j.event); detail = String(j.detail || ""); }
+        else if (j.msg !== undefined) { evt = String(j.msg); warn = j.ok === false; }
+      } catch (e) { evt = text; }
+
+      var up = evt.toUpperCase();
+      if (/FAIL|WRONG|DENIED|INVALID/.test(up)) warn = true;
+
+      var line = EVENT_TEXT[evt] || evt;
+      if (detail) line += " (" + (DETAIL_TEXT[detail] || detail) + ")";
+      addLog(line, warn);
+
+      if (evt === "REMOTE_UNLOCK") notice("Cửa đã mở.", "ok");
+      else if (evt === "REMOTE_LOCK") notice("Cửa đã khóa.", "ok");
+      else if (evt === "REMOTE_WRONG_PIN") notice("Sai PIN. Sai 3 lần liên tiếp sẽ bị chặn 60 giây.", "bad");
+      else if (evt === "REMOTE_DENIED") notice("Cửa từ chối lệnh mở: " + (DETAIL_TEXT[detail] || detail) + ".", "bad");
+    }
+  }
+
+  function addLog(text, warn) {
+    logs.unshift({ time: new Date(), text: text, warn: warn });
+    if (logs.length > 30) logs.pop();
+    var ul = $("log");
+    ul.textContent = "";
+    logs.forEach(function (l) {
+      var li = document.createElement("li");
+      var t = document.createElement("time");
+      t.textContent = l.time.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      var s = document.createElement("span");
+      s.textContent = l.text;
+      if (l.warn) s.className = "warn";
+      li.appendChild(t);
+      li.appendChild(s);
+      ul.appendChild(li);
+    });
+    $("logEmpty").hidden = logs.length > 0;
+  }
+
+  // ===== Hiển thị trạng thái =====
+  function render() {
+    var dial = $("dial"), st = $("state"), sub = $("sub");
+    dial.classList.remove("is-open", "is-off");
+    var canUnlock = false;
+
+    if (state.online === "offline") {
+      dial.classList.add("is-off");
+      st.textContent = "Cửa đang offline";
+      sub.textContent = "Kiểm tra nguồn điện và Wi-Fi của ESP32";
+    } else if (state.status === "lockdown") {
+      st.textContent = "Khóa bảo mật";
+      sub.textContent = "Cửa bị khóa do nhập sai nhiều lần";
+    } else if (state.status === "unlocked") {
+      dial.classList.add("is-open");
+      st.textContent = "Đang mở";
+      sub.textContent = "Cửa sẽ tự khóa lại khi không còn người";
+    } else if (state.status === "locked") {
+      st.textContent = "Đang khóa";
+      sub.textContent = "Nhập PIN rồi giữ nút tròn 1 giây để mở";
+      canUnlock = true;
+    } else {
+      dial.classList.add("is-off");
+      st.textContent = "Đang chờ thiết bị…";
+      sub.textContent = "Chưa nhận được trạng thái cửa";
+    }
+
+    dial.disabled = !canUnlock;
+    dial.setAttribute("aria-label", canUnlock ? "Giữ để mở cửa" : st.textContent);
+    $("lockBtn").disabled = state.online === "offline" || state.status === null;
+  }
+
+  // ===== Giữ để mở =====
+  function startHold() {
+    var dial = $("dial");
+    if (dial.disabled || holdTimer) return;
+    var pin = $("pin").value.trim();
+    if (!pin) {
+      notice("Nhập PIN trước khi mở cửa.", "bad");
+      $("pin").focus();
+      return;
+    }
+    dial.classList.add("holding");
+    holdTimer = setTimeout(function () {
+      dial.classList.remove("holding");
+      holdTimer = null;
+      if (send("UNLOCK " + pin)) {
+        $("pin").value = "";
+        notice("Đã gửi lệnh mở cửa. Đang chờ cửa phản hồi…");
+        if (navigator.vibrate) navigator.vibrate(40);
+      }
+    }, 900);
+  }
+
+  function cancelHold() {
+    if (!holdTimer) return;
+    clearTimeout(holdTimer);
+    holdTimer = null;
+    $("dial").classList.remove("holding");
+  }
+
+  // ===== Sự kiện giao diện =====
+  var dialEl = $("dial");
+  dialEl.addEventListener("pointerdown", function (e) { e.preventDefault(); startHold(); });
+  ["pointerup", "pointerleave", "pointercancel"].forEach(function (ev) { dialEl.addEventListener(ev, cancelHold); });
+  dialEl.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+  dialEl.addEventListener("keydown", function (e) {
+    if ((e.key === " " || e.key === "Enter") && !e.repeat) { e.preventDefault(); startHold(); }
+  });
+  dialEl.addEventListener("keyup", function (e) {
+    if (e.key === " " || e.key === "Enter") cancelHold();
+  });
+
+  $("lockBtn").addEventListener("click", function () {
+    if (send("LOCK")) notice("Đã gửi lệnh khóa cửa.");
+  });
+
+  $("logoutBtn").addEventListener("click", function () {
+    if (client) client.end(true);
+    client = null;
+    state = { status: null, online: null };
+    logs = [];
+    $("log").textContent = "";
+    $("logEmpty").hidden = false;
+    notice("");
+    setConn("Chưa kết nối", "");
+    showMain(false);
+  });
+
+  $("loginForm").addEventListener("submit", function (e) {
+    e.preventDefault();
+    connect($("user").value.trim(), $("pass").value);
+  });
+
+  try {
+    var saved = localStorage.getItem("sd_user");
+    if (saved) $("user").value = saved;
+  } catch (e) {}
+</script>
+</body>
+</html>
